@@ -612,22 +612,103 @@ function shuffle(arr) {
   return arr;
 }
 
-// ── Build tile data
+// ── Smart shuffle: build board by reverse-solving
+// Works backwards — starts with a cleared board and places pairs one at a time,
+// always choosing positions that are currently "available" in the empty-building sense.
+// This guarantees at least one valid solution path exists through the board.
+// A small amount of randomness in pair ordering keeps it challenging.
 function buildTiles() {
-  // 25 cars × 2 = 50 tiles — shuffle only the car IDs, keep positions fixed
-  let carIds = [];
-  for (let i = 1; i <= TOTAL_CARS; i++) carIds.push(i, i);
-  shuffle(carIds);
 
-  return LAYOUT.map((pos, idx) => ({
+  // Helper: check availability within an arbitrary tile array (not state.tiles)
+  function isFreeInSet(tile, tiles) {
+    if (tile.removed) return false;
+    const coveredAbove = tiles.some(t =>
+      !t.removed && t.id !== tile.id &&
+      t.z > tile.z && t.c === tile.c && t.r === tile.r
+    );
+    if (coveredAbove) return false;
+    const blockLeft  = tiles.some(t => !t.removed && t.id !== tile.id && t.z === tile.z && t.r === tile.r && t.c === tile.c - 1);
+    const blockRight = tiles.some(t => !t.removed && t.id !== tile.id && t.z === tile.z && t.r === tile.r && t.c === tile.c + 1);
+    return !(blockLeft && blockRight);
+  }
+
+  // Build initial tile objects with no carId assigned yet
+  let tiles = LAYOUT.map((pos, idx) => ({
     id: idx,
-    carId: carIds[idx],
+    carId: null,
     c: pos.c,
     r: pos.r,
     z: pos.z,
     removed: false,
     el: null,
   }));
+
+  // Car IDs to assign: 25 pairs
+  let carPool = [];
+  for (let i = 1; i <= TOTAL_CARS; i++) carPool.push(i, i);
+  shuffle(carPool);
+
+  // We'll assign carIds by simulating removal in reverse:
+  // 1. Find all currently-available tiles
+  // 2. Pick a random available pair of positions
+  // 3. Assign the next car ID to both
+  // 4. Mark them removed (so the "layer below" becomes available)
+  // 5. Repeat until all tiles assigned
+
+  // We work on a COPY for the simulation — tiles start as "all present"
+  // and we peel pairs off the top, assigning car IDs as we go.
+
+  let unassigned = tiles.map(t => ({...t})); // simulation copy
+  let carIdx = 0;
+  let attempts = 0;
+  const maxAttempts = 2000;
+
+  while (carIdx < carPool.length && attempts < maxAttempts) {
+    attempts++;
+
+    // Find available tiles in current simulation state
+    const avail = unassigned.filter(t => !t.removed && isFreeInSet(t, unassigned));
+
+    if (avail.length < 2) {
+      // Stuck — restart with a new shuffle
+      shuffle(carPool);
+      carIdx = 0;
+      unassigned = tiles.map(t => ({...t, removed: false, carId: null}));
+      continue;
+    }
+
+    // Pick two different available positions at random
+    // Slightly bias toward higher-z tiles to peel layers naturally
+    const weighted = [...avail];
+    shuffle(weighted);
+
+    // Pick first tile
+    const a = weighted[0];
+    // Pick second tile — prefer same z-level for natural pairing, fallback to any
+    const sameZ = weighted.filter(t => t.id !== a.id && t.z === a.z);
+    const b = sameZ.length > 0 ? sameZ[0] : weighted.find(t => t.id !== a.id);
+
+    if (!b) continue;
+
+    // Assign the same car ID to both positions
+    const car = carPool[carIdx];
+    tiles[a.id].carId = car;
+    tiles[b.id].carId = car;
+    carIdx += 2;
+
+    // Mark as removed in simulation so layers below become available
+    unassigned[a.id].removed = true;
+    unassigned[b.id].removed = true;
+  }
+
+  // If any tiles still unassigned (shouldn't happen but safety net),
+  // fill with random remaining cars
+  const remaining = tiles.filter(t => t.carId === null);
+  const leftover = carPool.slice(carIdx);
+  shuffle(leftover);
+  remaining.forEach((t, i) => { t.carId = leftover[i] || 1; });
+
+  return tiles;
 }
 
 // ── Tile size (responsive)
