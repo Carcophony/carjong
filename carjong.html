@@ -535,59 +535,125 @@
 const IMG_BASE = 'https://raw.githubusercontent.com/Carcophony/car-lottery/main/images/';
 const TOTAL_CARS = 25;
 
-// ── Board layout — 50 tiles in a layered pyramid
-// IMPORTANT: Each layer uses OFFSET coordinates so tiles genuinely stack.
-// A tile at z=1 covers tiles at z=0 whose c,r are within ±0.5 of its c,r.
-// We use half-unit offsets: layer 1 sits between layer 0 tiles.
-// All positions are unique (no two tiles share exact c,r,z).
-//
-// Stacking rule used in isAvailable:
-//   Tile B (higher z) covers tile A (lower z) if:
-//   Math.abs(B.c - A.c) < 1 AND Math.abs(B.r - A.r) < 1
-//
-// Layout uses integer coords for z=0, half-offsets for higher layers.
-// Total: 30 + 12 + 6 + 2 = 50
-
+// ── LAYOUT: 50 tiles
+// Stacking: tile B (z>0) covers tile A (z=0) when B.c===A.c AND B.r===A.r
+// The SAME c,r can appear at multiple z values — that is the stacking.
+// Side blocking: same z, same r, c differs by 1.
 const LAYOUT = [
   // z=0 base — 30 tiles
-  // Main body 6×4
-  {c:0,r:0,z:0},{c:1,r:0,z:0},{c:2,r:0,z:0},{c:3,r:0,z:0},{c:4,r:0,z:0},{c:5,r:0,z:0},
-  {c:0,r:1,z:0},{c:1,r:1,z:0},{c:2,r:1,z:0},{c:3,r:1,z:0},{c:4,r:1,z:0},{c:5,r:1,z:0},
-  {c:0,r:2,z:0},{c:1,r:2,z:0},{c:2,r:2,z:0},{c:3,r:2,z:0},{c:4,r:2,z:0},{c:5,r:2,z:0},
-  {c:0,r:3,z:0},{c:1,r:3,z:0},{c:2,r:3,z:0},{c:3,r:3,z:0},{c:4,r:3,z:0},{c:5,r:3,z:0},
-  // Head (left arm) — 2 tiles
-  {c:-2,r:1,z:0},{c:-1,r:1,z:0},
-  // Tail (right arm) — 2 tiles
-  {c:6,r:1,z:0},{c:7,r:1,z:0},
-  // Feet (corners) — 2 tiles
-  {c:-1,r:0,z:0},{c:6,r:0,z:0},
+  {c:2,r:0,z:0},{c:3,r:0,z:0},{c:4,r:0,z:0},{c:5,r:0,z:0},{c:6,r:0,z:0},{c:7,r:0,z:0},
+  {c:2,r:1,z:0},{c:3,r:1,z:0},{c:4,r:1,z:0},{c:5,r:1,z:0},{c:6,r:1,z:0},{c:7,r:1,z:0},
+  {c:2,r:2,z:0},{c:3,r:2,z:0},{c:4,r:2,z:0},{c:5,r:2,z:0},{c:6,r:2,z:0},{c:7,r:2,z:0},
+  {c:2,r:3,z:0},{c:3,r:3,z:0},{c:4,r:3,z:0},{c:5,r:3,z:0},{c:6,r:3,z:0},{c:7,r:3,z:0},
+  {c:0,r:1,z:0},{c:1,r:1,z:0},
+  {c:8,r:1,z:0},{c:9,r:1,z:0},
+  {c:1,r:0,z:0},{c:8,r:0,z:0},
 
-  // z=1 second layer — 12 tiles (offset by 0.5 so they sit between base tiles)
-  {c:0.5,r:0.5,z:1},{c:1.5,r:0.5,z:1},{c:2.5,r:0.5,z:1},{c:3.5,r:0.5,z:1},
-  {c:0.5,r:1.5,z:1},{c:1.5,r:1.5,z:1},{c:2.5,r:1.5,z:1},{c:3.5,r:1.5,z:1},
-  {c:0.5,r:2.5,z:1},{c:1.5,r:2.5,z:1},{c:2.5,r:2.5,z:1},{c:3.5,r:2.5,z:1},
+  // z=1 — 12 tiles (same c,r range as body — stacks on top)
+  {c:3,r:0,z:1},{c:4,r:0,z:1},{c:5,r:0,z:1},{c:6,r:0,z:1},
+  {c:3,r:1,z:1},{c:4,r:1,z:1},{c:5,r:1,z:1},{c:6,r:1,z:1},
+  {c:3,r:2,z:1},{c:4,r:2,z:1},{c:5,r:2,z:1},{c:6,r:2,z:1},
 
-  // z=2 third layer — 6 tiles
-  {c:1,r:1,z:2},{c:2,r:1,z:2},{c:3,r:1,z:2},
-  {c:1,r:2,z:2},{c:2,r:2,z:2},{c:3,r:2,z:2},
+  // z=2 — 6 tiles
+  {c:4,r:0,z:2},{c:5,r:0,z:2},{c:6,r:0,z:2},
+  {c:4,r:1,z:2},{c:5,r:1,z:2},{c:6,r:1,z:2},
 
   // z=3 apex — 2 tiles
-  {c:1.5,r:1.5,z:3},{c:2.5,r:1.5,z:3},
+  {c:4,r:0,z:3},{c:5,r:0,z:3},
 ];
+
+// ── Is tile available?
+function isAvailable(tile) {
+  if (tile.removed) return false;
+  // Covered: any higher-z tile at the exact same c,r
+  const covered = state.tiles.some(t =>
+    !t.removed && t.id !== tile.id && t.z > tile.z && t.c === tile.c && t.r === tile.r
+  );
+  if (covered) return false;
+  // Side-free: not blocked on both left AND right
+  const leftBlock  = state.tiles.some(t => !t.removed && t.id !== tile.id && t.z === tile.z && t.r === tile.r && t.c === tile.c - 1);
+  const rightBlock = state.tiles.some(t => !t.removed && t.id !== tile.id && t.z === tile.z && t.r === tile.r && t.c === tile.c + 1);
+  return !(leftBlock && rightBlock);
+}
+
+// ── Smart shuffle
+// Simulates solving the board, records which position-pairs go together,
+// then assigns ONE car ID per pair. Pool has 25 items — one per car.
+// This GUARANTEES each car appears exactly twice. No exceptions.
+function buildTiles() {
+
+  function canPickInScratch(t, arr) {
+    if (t.removed) return false;
+    const covered = arr.some(o => !o.removed && o.id !== t.id && o.z > t.z && o.c === t.c && o.r === t.r);
+    if (covered) return false;
+    const lb = arr.some(o => !o.removed && o.id !== t.id && o.z === t.z && o.r === t.r && o.c === t.c - 1);
+    const rb = arr.some(o => !o.removed && o.id !== t.id && o.z === t.z && o.r === t.r && o.c === t.c + 1);
+    return !(lb && rb);
+  }
+
+  // Scratch board — positions only
+  const scratch = LAYOUT.map((p, i) => ({ id: i, c: p.c, r: p.r, z: p.z, removed: false }));
+
+  // Simulate solving: collect pairs of position-indices
+  const pairIndices = []; // [{a, b}, ...]
+  for (let attempt = 0; attempt < 5000 && pairIndices.length < 25; attempt++) {
+    const avail = scratch.filter(t => !t.removed && canPickInScratch(t, scratch));
+    if (avail.length < 2) break;
+    // Shuffle available list
+    for (let i = avail.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [avail[i], avail[j]] = [avail[j], avail[i]];
+    }
+    const a = avail[0];
+    const b = avail[1]; // just take the next available — both are valid
+    pairIndices.push({ a: a.id, b: b.id });
+    scratch[a.id].removed = true;
+    scratch[b.id].removed = true;
+  }
+
+  // Any tiles the solver didn't reach — pair them up too
+  const leftover = scratch.filter(t => !t.removed).map(t => t.id);
+  for (let i = 0; i + 1 < leftover.length; i += 2) {
+    pairIndices.push({ a: leftover[i], b: leftover[i + 1] });
+  }
+
+  // Car pool: exactly 25 cars, one per pair
+  const cars = [];
+  for (let i = 1; i <= 25; i++) cars.push(i);
+  // Shuffle cars
+  for (let i = cars.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [cars[i], cars[j]] = [cars[j], cars[i]];
+  }
+
+  // Build final tiles — assign car from cars[pairIndex] to BOTH positions
+  const tiles = LAYOUT.map((p, i) => ({ id: i, carId: 0, c: p.c, r: p.r, z: p.z, removed: false, el: null }));
+
+  pairIndices.forEach((pair, i) => {
+    const car = cars[i % 25]; // mod 25 as safety — should never exceed 24
+    tiles[pair.a].carId = car;
+    tiles[pair.b].carId = car;
+  });
+
+  // Final safety: any tile still 0 gets a car (shouldn't happen)
+  let fallbackCar = 1;
+  tiles.filter(t => t.carId === 0).forEach(t => { t.carId = fallbackCar++; });
+
+  return tiles;
+}
 
 // ── State
 let state = {
-  tiles: [],          // {id, carId, c, r, z, removed, el}
+  tiles: [],
   selected: null,
   score: 0,
   combo: 0,
   timerStart: null,
-  timerEl: null,
   timerInterval: null,
   gameActive: false,
-  mode: 'classic',    // 'classic' | 'rush'
+  mode: 'classic',
   rushInterval: null,
-  rushRemaining: 180, // seconds
+  rushRemaining: 180,
   rushTotal: 180,
   pb: { classic: null, rush: null },
   pairsRemoved: 0,
@@ -595,12 +661,9 @@ let state = {
   lastScore: 0,
 };
 
-// ── Load PBs
+// ── PBs
 function loadPBs() {
-  try {
-    const saved = localStorage.getItem('carjong_pb');
-    if (saved) state.pb = JSON.parse(saved);
-  } catch(e) {}
+  try { const s = localStorage.getItem('carjong_pb'); if (s) state.pb = JSON.parse(s); } catch(e) {}
   updatePBDisplay();
 }
 function savePBs() {
@@ -625,102 +688,13 @@ function shuffle(arr) {
   return arr;
 }
 
-// ── Smart shuffle: build board by reverse-solving
-// Works backwards — simulates peeling pairs off a full board, always from
-// available positions. Guarantees at least one valid solution path exists.
-function buildTiles() {
-
-  function isFreeInSet(tile, tiles) {
-    if (tile.removed) return false;
-    const coveredAbove = tiles.some(t =>
-      !t.removed && t.id !== tile.id &&
-      t.z > tile.z &&
-      Math.abs(t.c - tile.c) < 1 &&
-      Math.abs(t.r - tile.r) < 1
-    );
-    if (coveredAbove) return false;
-    const blockLeft  = tiles.some(t =>
-      !t.removed && t.id !== tile.id &&
-      t.z === tile.z && Math.abs(t.r - tile.r) < 0.6 &&
-      t.c < tile.c && tile.c - t.c < 1.1
-    );
-    const blockRight = tiles.some(t =>
-      !t.removed && t.id !== tile.id &&
-      t.z === tile.z && Math.abs(t.r - tile.r) < 0.6 &&
-      t.c > tile.c && t.c - tile.c < 1.1
-    );
-    return !(blockLeft && blockRight);
-  }
-
-  function attemptBuild() {
-    // Fresh simulation tiles — no carIds yet
-    let sim = LAYOUT.map((pos, idx) => ({
-      id: idx, carId: null,
-      c: pos.c, r: pos.r, z: pos.z,
-      removed: false,
-    }));
-
-    // Shuffled pool of 25 pairs
-    let pool = [];
-    for (let i = 1; i <= TOTAL_CARS; i++) pool.push(i, i);
-    shuffle(pool);
-
-    let poolIdx = 0;
-
-    while (poolIdx < pool.length) {
-      // Available tiles in current sim state
-      const avail = sim.filter(t => !t.removed && isFreeInSet(t, sim));
-      if (avail.length < 2) return null; // dead end — caller will retry
-
-      shuffle(avail);
-      const a = avail[0];
-
-      // Prefer same z-layer for natural peeling; fallback any other tile
-      const sameZ = avail.filter(t => t.id !== a.id && t.z === a.z);
-      const b = sameZ.length > 0 ? sameZ[0] : avail.find(t => t.id !== a.id);
-      if (!b) return null;
-
-      const car = pool[poolIdx];
-      sim[a.id].carId = car;
-      sim[b.id].carId = car;
-      poolIdx += 2;
-
-      sim[a.id].removed = true;
-      sim[b.id].removed = true;
-    }
-
-    // All 50 tiles assigned — return as proper tile objects
-    return sim.map(t => ({
-      id: t.id, carId: t.carId,
-      c: t.c, r: t.r, z: t.z,
-      removed: false, el: null,
-    }));
-  }
-
-  // Try up to 50 times — usually succeeds in 1-3
-  for (let i = 0; i < 50; i++) {
-    const result = attemptBuild();
-    if (result) return result;
-  }
-
-  // Ultimate fallback: pure random (shouldn't ever reach this)
-  let carIds = [];
-  for (let i = 1; i <= TOTAL_CARS; i++) carIds.push(i, i);
-  shuffle(carIds);
-  return LAYOUT.map((pos, idx) => ({
-    id: idx, carId: carIds[idx],
-    c: pos.c, r: pos.r, z: pos.z,
-    removed: false, el: null,
-  }));
-}
-
 // ── Tile size (responsive)
 function getTileSize() {
   const vw = window.innerWidth;
-  if (vw < 400) return { w: 36, h: 44, gap: 2, ox: 4, oy: 4 };
-  if (vw < 600) return { w: 44, h: 54, gap: 2, ox: 5, oy: 5 };
-  if (vw < 900) return { w: 56, h: 68, gap: 2, ox: 6, oy: 6 };
-  return { w: 68, h: 82, gap: 2, ox: 8, oy: 8 };
+  if (vw < 400) return { w: 36, h: 44, ox: 4, oy: 4 };
+  if (vw < 600) return { w: 44, h: 54, ox: 5, oy: 5 };
+  if (vw < 900) return { w: 56, h: 68, ox: 6, oy: 6 };
+  return { w: 68, h: 82, ox: 8, oy: 8 };
 }
 
 // ── Render board
@@ -729,45 +703,31 @@ function renderBoard() {
   board.innerHTML = '';
   const sz = getTileSize();
 
-  // Find board bounds
   const maxC = Math.max(...state.tiles.map(t => t.c)) + 1;
   const maxR = Math.max(...state.tiles.map(t => t.r)) + 1;
   const maxZ = Math.max(...state.tiles.map(t => t.z)) + 1;
 
-  const boardW = maxC * sz.w + maxZ * sz.ox + 20;
-  const boardH = maxR * sz.h + maxZ * sz.oy + 20;
-  board.style.width = boardW + 'px';
-  board.style.height = boardH + 'px';
+  board.style.width  = (maxC * sz.w + maxZ * sz.ox + 20) + 'px';
+  board.style.height = (maxR * sz.h + maxZ * sz.oy + 20) + 'px';
 
-  // Sort by z so higher layers render on top
-  const sorted = [...state.tiles].sort((a,b) => a.z - b.z);
-
-  sorted.forEach(tile => {
+  [...state.tiles].sort((a, b) => a.z - b.z).forEach(tile => {
     if (tile.removed) return;
-
     const x = tile.c * sz.w + tile.z * sz.ox + 10;
     const y = tile.r * sz.h + tile.z * sz.oy + 10;
 
     const el = document.createElement('div');
     el.className = 'tile';
-    el.style.width = sz.w + 'px';
-    el.style.height = sz.h + 'px';
-    el.style.left = x + 'px';
-    el.style.top = y + 'px';
-    el.style.zIndex = tile.z * 10 + 1;
+    el.style.cssText = `width:${sz.w}px;height:${sz.h}px;left:${x}px;top:${y}px;z-index:${tile.z * 10 + 1}`;
     el.dataset.id = tile.id;
 
     const inner = document.createElement('div');
     inner.className = 'tile-inner';
-
     const img = document.createElement('img');
     img.src = IMG_BASE + tile.carId + '.png';
     img.alt = 'Car ' + tile.carId;
     img.loading = 'lazy';
-
     inner.appendChild(img);
     el.appendChild(inner);
-
     el.addEventListener('click', () => onTileClick(tile.id));
     tile.el = el;
     board.appendChild(el);
@@ -775,36 +735,6 @@ function renderBoard() {
 
   updateTileStates();
   updateRemainingBar();
-}
-
-// ── Is tile available (not locked)?
-function isAvailable(tile) {
-  if (tile.removed) return false;
-
-  // Covered: any tile at a higher z whose c,r overlaps this tile's c,r
-  // Overlap means both coords are within 1 unit of each other
-  const coveredAbove = state.tiles.some(t =>
-    !t.removed && t.id !== tile.id &&
-    t.z > tile.z &&
-    Math.abs(t.c - tile.c) < 1 &&
-    Math.abs(t.r - tile.r) < 1
-  );
-  if (coveredAbove) return false;
-
-  // Free on left OR right: no same-z tile within 1 unit horizontally on same row
-  const blockLeft = state.tiles.some(t =>
-    !t.removed && t.id !== tile.id &&
-    t.z === tile.z &&
-    Math.abs(t.r - tile.r) < 0.6 &&
-    t.c < tile.c && tile.c - t.c < 1.1
-  );
-  const blockRight = state.tiles.some(t =>
-    !t.removed && t.id !== tile.id &&
-    t.z === tile.z &&
-    Math.abs(t.r - tile.r) < 0.6 &&
-    t.c > tile.c && t.c - tile.c < 1.1
-  );
-  return !(blockLeft && blockRight);
 }
 
 // ── Update visual states
@@ -823,7 +753,6 @@ function onTileClick(id) {
   if (!state.gameActive) return;
   const tile = state.tiles.find(t => t.id === id);
   if (!tile || tile.removed || !isAvailable(tile)) return;
-
   if (!state.timerStart) startTimer();
 
   if (!state.selected) {
@@ -831,22 +760,16 @@ function onTileClick(id) {
     tile.el.classList.add('selected');
     return;
   }
-
   if (state.selected.id === tile.id) {
-    // Deselect
     state.selected.el.classList.remove('selected');
     state.selected = null;
     updateTileStates();
     return;
   }
-
   if (state.selected.carId === tile.carId) {
-    // Match!
     removePair(state.selected, tile);
   } else {
-    // No match
-    const prev = state.selected;
-    flashWrong(prev.el);
+    flashWrong(state.selected.el);
     flashWrong(tile.el);
     state.combo = 0;
     state.selected = null;
@@ -855,37 +778,24 @@ function onTileClick(id) {
 }
 
 function flashWrong(el) {
-  el.classList.remove('wrong');
-  void el.offsetWidth;
-  el.classList.add('wrong');
+  el.classList.remove('wrong'); void el.offsetWidth; el.classList.add('wrong');
   setTimeout(() => el.classList.remove('wrong'), 400);
 }
 
-// ── Remove a matched pair
+// ── Remove matched pair
 function removePair(a, b) {
   state.combo++;
   state.pairsRemoved++;
-
-  // Score: base 100 + combo bonus + speed bonus
-  const baseScore = 100;
-  const comboBonus = (state.combo - 1) * 50;
-  const elapsed = state.timerStart ? Math.floor((Date.now() - state.timerStart) / 1000) : 0;
-  const speedBonus = Math.max(0, 30 - elapsed) * 2;
-  const points = baseScore + comboBonus;
-  state.score += points;
+  state.score += 100 + (state.combo - 1) * 50;
   document.getElementById('stat-score').textContent = state.score;
-
   if (state.combo >= 3) showCombo(state.combo);
 
   [a, b].forEach(tile => {
     tile.removed = true;
-    tile.el.classList.remove('selected','available');
+    tile.el.classList.remove('selected', 'available');
     tile.el.classList.add('removing');
-    setTimeout(() => {
-      if (tile.el) tile.el.style.display = 'none';
-    }, 350);
+    setTimeout(() => { if (tile.el) tile.el.style.display = 'none'; }, 350);
   });
-
   state.selected = null;
 
   setTimeout(() => {
@@ -895,7 +805,7 @@ function removePair(a, b) {
     if (remaining === 0) {
       endGame(true);
     } else if (!hasValidMoves()) {
-      checkDeadlock();
+      setTimeout(() => { if (!hasValidMoves()) showOverlay('DEADLOCK', 'No more valid moves. Try shuffling!', false); }, 200);
     }
   }, 380);
 }
@@ -903,38 +813,17 @@ function removePair(a, b) {
 // ── Combo popup
 function showCombo(n) {
   const el = document.getElementById('combo-popup');
-  const msgs = {3:'TRIPLE!', 4:'QUAD!', 5:'ON FIRE!', 6:'INFERNO!', 7:'UNSTOPPABLE!', 8:'LEGENDARY!'};
+  const msgs = {3:'TRIPLE!',4:'QUAD!',5:'ON FIRE!',6:'INFERNO!',7:'UNSTOPPABLE!',8:'LEGENDARY!'};
   el.textContent = msgs[Math.min(n,8)] || `${n}× COMBO!`;
-  el.classList.remove('show');
-  void el.offsetWidth;
-  el.classList.add('show');
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 800);
-}
-
-// ── Check win
-function checkWin() {
-  const remaining = state.tiles.filter(t => !t.removed).length;
-  if (remaining === 0) {
-    endGame(true);
-  }
-}
-
-// ── Check deadlock
-function checkDeadlock() {
-  setTimeout(() => {
-    if (!hasValidMoves()) {
-      showOverlay('DEADLOCK', 'No more valid moves. Try shuffling!', false);
-    }
-  }, 200);
 }
 
 function hasValidMoves() {
   const avail = state.tiles.filter(t => !t.removed && isAvailable(t));
-  for (let i = 0; i < avail.length; i++) {
-    for (let j = i+1; j < avail.length; j++) {
+  for (let i = 0; i < avail.length; i++)
+    for (let j = i+1; j < avail.length; j++)
       if (avail[i].carId === avail[j].carId) return true;
-    }
-  }
   return false;
 }
 
@@ -943,24 +832,16 @@ function startTimer() {
   state.timerStart = Date.now();
   clearInterval(state.timerInterval);
   state.timerInterval = setInterval(() => {
-    if (!state.timerStart) return;
-    const elapsed = Math.floor((Date.now() - state.timerStart) / 1000);
-    document.getElementById('stat-time').textContent = formatTime(elapsed);
-    state.lastTime = formatTime(elapsed);
+    const e = Math.floor((Date.now() - state.timerStart) / 1000);
+    const t = formatTime(e);
+    document.getElementById('stat-time').textContent = t;
+    state.lastTime = t;
   }, 500);
 }
+function stopTimer() { clearInterval(state.timerInterval); state.timerInterval = null; }
+function getElapsed() { return state.timerStart ? Math.floor((Date.now() - state.timerStart) / 1000) : 0; }
 
-function stopTimer() {
-  clearInterval(state.timerInterval);
-  state.timerInterval = null;
-}
-
-function getElapsedSeconds() {
-  if (!state.timerStart) return 0;
-  return Math.floor((Date.now() - state.timerStart) / 1000);
-}
-
-// ── Rush Hour timer
+// ── Rush Hour
 function startRushTimer() {
   document.getElementById('rush-bar').classList.add('visible');
   state.rushRemaining = state.rushTotal;
@@ -969,61 +850,36 @@ function startRushTimer() {
   state.rushInterval = setInterval(() => {
     state.rushRemaining--;
     updateRushBar();
-    if (state.rushRemaining <= 0) {
-      clearInterval(state.rushInterval);
-      endGame(false, true);
-    }
+    if (state.rushRemaining <= 0) { clearInterval(state.rushInterval); endGame(false, true); }
   }, 1000);
 }
-
-function stopRushTimer() {
-  clearInterval(state.rushInterval);
-  document.getElementById('rush-bar').classList.remove('visible');
-}
-
+function stopRushTimer() { clearInterval(state.rushInterval); document.getElementById('rush-bar').classList.remove('visible'); }
 function updateRushBar() {
-  const pct = (state.rushRemaining / state.rushTotal) * 100;
-  document.getElementById('rush-fill').style.width = pct + '%';
+  document.getElementById('rush-fill').style.width = ((state.rushRemaining / state.rushTotal) * 100) + '%';
   document.getElementById('rush-label').textContent = formatTime(state.rushRemaining);
 }
 
 // ── Remaining bar
 function updateRemainingBar() {
-  const remaining = state.tiles.filter(t => !t.removed).length;
-  const total = state.tiles.length;
-  const pct = (remaining / total) * 100;
-  document.getElementById('remaining-fill').style.width = pct + '%';
-  document.getElementById('remaining-label').textContent = `${remaining} tiles left`;
+  const rem = state.tiles.filter(t => !t.removed).length;
+  document.getElementById('remaining-fill').style.width = ((rem / state.tiles.length) * 100) + '%';
+  document.getElementById('remaining-label').textContent = `${rem} tiles left`;
 }
 
 // ── End game
-function endGame(won, timeout=false) {
+function endGame(won, timeout) {
   state.gameActive = false;
   stopTimer();
   stopRushTimer();
-
-  const elapsed = getElapsedSeconds();
   state.lastScore = state.score;
-
+  const elapsed = getElapsed();
   if (won) {
-    // Check PB
     const pb = state.pb[state.mode];
-    let newPB = false;
-    if (!pb || elapsed < pb) {
-      state.pb[state.mode] = elapsed;
-      savePBs();
-      updatePBDisplay();
-      newPB = true;
-    }
-    const title = newPB ? 'NEW BEST!' : 'CLEARED!';
-    const sub = newPB
-      ? `New personal best! You cleared the board in ${state.lastTime}.`
-      : `Board cleared! Great driving.`;
-    showOverlay(title, sub, true);
+    const newPB = !pb || elapsed < pb;
+    if (newPB) { state.pb[state.mode] = elapsed; savePBs(); updatePBDisplay(); }
+    showOverlay(newPB ? 'NEW BEST!' : 'CLEARED!', newPB ? `New personal best! Board cleared in ${state.lastTime}.` : 'Board cleared! Great driving.', true);
   } else if (timeout) {
     showOverlay('TIME UP!', 'Rush Hour is over. Better luck next race!', false);
-  } else {
-    showOverlay('DEADLOCK', 'No valid moves remain.', false);
   }
 }
 
@@ -1049,9 +905,7 @@ function giveHint() {
         state.score = Math.max(0, state.score - 100);
         document.getElementById('stat-score').textContent = state.score;
         [avail[i].el, avail[j].el].forEach(el => {
-          el.classList.remove('hint');
-          void el.offsetWidth;
-          el.classList.add('hint');
+          el.classList.remove('hint'); void el.offsetWidth; el.classList.add('hint');
           setTimeout(() => el.classList.remove('hint'), 1800);
         });
         state.combo = 0;
@@ -1061,90 +915,63 @@ function giveHint() {
   }
 }
 
-// ── Shuffle remaining tiles
+// ── Shuffle remaining
 function doShuffle() {
   if (!state.gameActive) return;
   state.score = Math.max(0, state.score - 200);
   document.getElementById('stat-score').textContent = state.score;
   state.combo = 0;
-
-  const remaining = state.tiles.filter(t => !t.removed);
-  const carIds = shuffle(remaining.map(t => t.carId));
-  remaining.forEach((tile, i) => tile.carId = carIds[i]);
-
-  // Re-render images
-  remaining.forEach(tile => {
-    if (tile.el) {
-      const img = tile.el.querySelector('img');
-      if (img) img.src = IMG_BASE + tile.carId + '.png';
-    }
-  });
-
+  const rem = state.tiles.filter(t => !t.removed);
+  const cars = shuffle(rem.map(t => t.carId));
+  rem.forEach((t, i) => { t.carId = cars[i]; if (t.el) { const img = t.el.querySelector('img'); if (img) img.src = IMG_BASE + t.carId + '.png'; }});
   updateTileStates();
-}
-
-// ── New game
-function newGame() {
-  stopTimer();
-  stopRushTimer();
-
-  state.tiles = buildTiles();
-  state.selected = null;
-  state.score = 0;
-  state.combo = 0;
-  state.timerStart = null;
-  state.pairsRemoved = 0;
-  state.lastTime = '0:00';
-  state.lastScore = 0;
-  state.gameActive = true;
-
-  document.getElementById('stat-score').textContent = '0';
-  document.getElementById('stat-time').textContent = '0:00';
-  document.getElementById('stat-mode-val').textContent = state.mode === 'rush' ? 'RUSH HOUR' : 'CLASSIC';
-  document.getElementById('overlay').classList.remove('visible');
-
-  renderBoard();
-
-  if (state.mode === 'rush') {
-    startRushTimer();
-  }
-
-  updatePBDisplay();
 }
 
 // ── Share
 function buildShareText() {
-  const modeStr = state.mode === 'rush' ? 'Rush Hour' : 'Classic';
+  const mode = state.mode === 'rush' ? 'Rush Hour' : 'Classic';
   const pb = state.pb[state.mode];
   const pbStr = pb ? ` (PB: ${formatTime(pb)})` : '';
-  return `🏎️ CarJong ${modeStr} – Score: ${state.lastScore} | Time: ${state.lastTime}${pbStr}\nCan you beat me? Play free at https://carcophony.github.io/carjong/carjong.html`;
+  return `🏎️ CarJong ${mode} – Score: ${state.lastScore} | Time: ${state.lastTime}${pbStr}\nCan you beat me? Play free at https://carcophony.github.io/carjong/carjong.html`;
 }
-
 function shareResult() {
   const text = buildShareText();
-  if (navigator.share) {
-    navigator.share({ text }).catch(() => copyShare(text));
-  } else {
-    copyShare(text);
-  }
+  if (navigator.share) { navigator.share({ text }).catch(() => copyShare(text)); } else { copyShare(text); }
 }
-
 function copyShare(text) {
   const el = document.getElementById('share-text');
-  el.textContent = text;
-  el.classList.add('visible');
+  el.textContent = text; el.classList.add('visible');
   try { navigator.clipboard.writeText(text); } catch(e) {}
 }
 
-// ── Mode buttons
+// ── New game
+function newGame() {
+  stopTimer(); stopRushTimer();
+  state.tiles = buildTiles();
+  state.selected = null; state.score = 0; state.combo = 0;
+  state.timerStart = null; state.pairsRemoved = 0; state.lastTime = '0:00'; state.lastScore = 0;
+  state.gameActive = true;
+  document.getElementById('stat-score').textContent = '0';
+  document.getElementById('stat-time').textContent = '0:00';
+  document.getElementById('stat-mode-val').textContent = state.mode === 'rush' ? 'RUSH HOUR' : 'CLASSIC';
+  document.getElementById('overlay').classList.remove('visible');
+  renderBoard();
+  if (state.mode === 'rush') startRushTimer();
+  updatePBDisplay();
+}
+
+// ── Button events
+document.getElementById('btn-new').addEventListener('click', newGame);
+document.getElementById('btn-hint').addEventListener('click', giveHint);
+document.getElementById('btn-shuffle').addEventListener('click', doShuffle);
+
 document.getElementById('btn-classic').addEventListener('click', () => {
   state.mode = 'classic';
   document.getElementById('btn-classic').classList.add('btn-active');
   document.getElementById('btn-classic').classList.remove('btn-muted');
   document.getElementById('btn-rush').classList.add('btn-muted');
   document.getElementById('btn-rush').classList.remove('btn-active');
-  updatePBDisplay();
-  newGame();
+  updatePBDisplay(); newGame();
 });
 document.getElementById('btn-rush').addEventListener('click', () => {
   state.mode = 'rush';
@@ -1152,15 +979,10 @@ document.getElementById('btn-rush').addEventListener('click', () => {
   document.getElementById('btn-rush').classList.remove('btn-muted');
   document.getElementById('btn-classic').classList.add('btn-muted');
   document.getElementById('btn-classic').classList.remove('btn-active');
-  updatePBDisplay();
-  newGame();
+  updatePBDisplay(); newGame();
 });
 
-document.getElementById('btn-new').addEventListener('click', newGame);
-document.getElementById('btn-hint').addEventListener('click', giveHint);
-document.getElementById('btn-shuffle').addEventListener('click', doShuffle);
 document.getElementById('btn-share').addEventListener('click', () => {
-  if (!state.lastScore && state.score === 0) return;
   const text = buildShareText();
   copyShare(text);
   document.getElementById('overlay').classList.add('visible');
@@ -1169,25 +991,12 @@ document.getElementById('btn-share').addEventListener('click', () => {
   document.getElementById('share-text').textContent = text;
   document.getElementById('share-text').classList.add('visible');
 });
-
-document.getElementById('ov-btn-play').addEventListener('click', () => {
-  document.getElementById('overlay').classList.remove('visible');
-  newGame();
-});
+document.getElementById('ov-btn-play').addEventListener('click', () => { document.getElementById('overlay').classList.remove('visible'); newGame(); });
 document.getElementById('ov-btn-share').addEventListener('click', shareResult);
 
 // ── Resize
 let resizeTimer;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
-    if (state.tiles.length > 0) renderBoard();
-  }, 200);
-});
-
-// ── Sound hooks (silent for now – drop audio files in later)
-// const sounds = { match: new Audio('sounds/match.mp3'), wrong: new Audio('sounds/wrong.mp3'), win: new Audio('sounds/win.mp3') };
-// function playSound(name) { try { sounds[name].currentTime=0; sounds[name].play(); } catch(e){} }
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.tiles.length > 0) renderBoard(); }, 200); });
 
 // ── Init
 loadPBs();
