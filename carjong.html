@@ -535,31 +535,44 @@
 const IMG_BASE = 'https://raw.githubusercontent.com/Carcophony/car-lottery/main/images/';
 const TOTAL_CARS = 25;
 
-// ── Board layout: exactly 50 tiles in a classic Mahjong-style pyramid
-// Each entry is {c=column, r=row, z=layer}. z=0 is the base, higher z = on top.
-// Tiles at higher z are stacked ON TOP of tiles at same c,r lower z.
-// 30 base + 12 layer1 + 6 layer2 + 2 layer3 = 50 total
+// ── Board layout — 50 tiles in a layered pyramid
+// IMPORTANT: Each layer uses OFFSET coordinates so tiles genuinely stack.
+// A tile at z=1 covers tiles at z=0 whose c,r are within ±0.5 of its c,r.
+// We use half-unit offsets: layer 1 sits between layer 0 tiles.
+// All positions are unique (no two tiles share exact c,r,z).
+//
+// Stacking rule used in isAvailable:
+//   Tile B (higher z) covers tile A (lower z) if:
+//   Math.abs(B.c - A.c) < 1 AND Math.abs(B.r - A.r) < 1
+//
+// Layout uses integer coords for z=0, half-offsets for higher layers.
+// Total: 30 + 12 + 6 + 2 = 50
+
 const LAYOUT = [
-  // z=0: base layer — 30 tiles (turtle body 4×6, head, tail, feet)
-  {c:2,r:1,z:0},{c:3,r:1,z:0},{c:4,r:1,z:0},{c:5,r:1,z:0},{c:6,r:1,z:0},{c:7,r:1,z:0},
-  {c:2,r:2,z:0},{c:3,r:2,z:0},{c:4,r:2,z:0},{c:5,r:2,z:0},{c:6,r:2,z:0},{c:7,r:2,z:0},
-  {c:2,r:3,z:0},{c:3,r:3,z:0},{c:4,r:3,z:0},{c:5,r:3,z:0},{c:6,r:3,z:0},{c:7,r:3,z:0},
-  {c:2,r:4,z:0},{c:3,r:4,z:0},{c:4,r:4,z:0},{c:5,r:4,z:0},{c:6,r:4,z:0},{c:7,r:4,z:0},
-  {c:0,r:2,z:0},{c:1,r:2,z:0},
-  {c:8,r:2,z:0},{c:9,r:2,z:0},
-  {c:1,r:0,z:0},{c:8,r:0,z:0},
+  // z=0 base — 30 tiles
+  // Main body 6×4
+  {c:0,r:0,z:0},{c:1,r:0,z:0},{c:2,r:0,z:0},{c:3,r:0,z:0},{c:4,r:0,z:0},{c:5,r:0,z:0},
+  {c:0,r:1,z:0},{c:1,r:1,z:0},{c:2,r:1,z:0},{c:3,r:1,z:0},{c:4,r:1,z:0},{c:5,r:1,z:0},
+  {c:0,r:2,z:0},{c:1,r:2,z:0},{c:2,r:2,z:0},{c:3,r:2,z:0},{c:4,r:2,z:0},{c:5,r:2,z:0},
+  {c:0,r:3,z:0},{c:1,r:3,z:0},{c:2,r:3,z:0},{c:3,r:3,z:0},{c:4,r:3,z:0},{c:5,r:3,z:0},
+  // Head (left arm) — 2 tiles
+  {c:-2,r:1,z:0},{c:-1,r:1,z:0},
+  // Tail (right arm) — 2 tiles
+  {c:6,r:1,z:0},{c:7,r:1,z:0},
+  // Feet (corners) — 2 tiles
+  {c:-1,r:0,z:0},{c:6,r:0,z:0},
 
-  // z=1: second layer — 12 tiles, sitting over the centre of the base
-  {c:3,r:1,z:1},{c:4,r:1,z:1},{c:5,r:1,z:1},{c:6,r:1,z:1},
-  {c:3,r:2,z:1},{c:4,r:2,z:1},{c:5,r:2,z:1},{c:6,r:2,z:1},
-  {c:3,r:3,z:1},{c:4,r:3,z:1},{c:5,r:3,z:1},{c:6,r:3,z:1},
+  // z=1 second layer — 12 tiles (offset by 0.5 so they sit between base tiles)
+  {c:0.5,r:0.5,z:1},{c:1.5,r:0.5,z:1},{c:2.5,r:0.5,z:1},{c:3.5,r:0.5,z:1},
+  {c:0.5,r:1.5,z:1},{c:1.5,r:1.5,z:1},{c:2.5,r:1.5,z:1},{c:3.5,r:1.5,z:1},
+  {c:0.5,r:2.5,z:1},{c:1.5,r:2.5,z:1},{c:2.5,r:2.5,z:1},{c:3.5,r:2.5,z:1},
 
-  // z=2: third layer — 6 tiles
-  {c:3,r:1,z:2},{c:4,r:1,z:2},{c:5,r:1,z:2},
-  {c:3,r:2,z:2},{c:4,r:2,z:2},{c:5,r:2,z:2},
+  // z=2 third layer — 6 tiles
+  {c:1,r:1,z:2},{c:2,r:1,z:2},{c:3,r:1,z:2},
+  {c:1,r:2,z:2},{c:2,r:2,z:2},{c:3,r:2,z:2},
 
-  // z=3: apex — 2 tiles
-  {c:3,r:1,z:3},{c:4,r:1,z:3},
+  // z=3 apex — 2 tiles
+  {c:1.5,r:1.5,z:3},{c:2.5,r:1.5,z:3},
 ];
 
 // ── State
@@ -621,11 +634,21 @@ function buildTiles() {
     if (tile.removed) return false;
     const coveredAbove = tiles.some(t =>
       !t.removed && t.id !== tile.id &&
-      t.z > tile.z && t.c === tile.c && t.r === tile.r
+      t.z > tile.z &&
+      Math.abs(t.c - tile.c) < 1 &&
+      Math.abs(t.r - tile.r) < 1
     );
     if (coveredAbove) return false;
-    const blockLeft  = tiles.some(t => !t.removed && t.id !== tile.id && t.z === tile.z && t.r === tile.r && t.c === tile.c - 1);
-    const blockRight = tiles.some(t => !t.removed && t.id !== tile.id && t.z === tile.z && t.r === tile.r && t.c === tile.c + 1);
+    const blockLeft  = tiles.some(t =>
+      !t.removed && t.id !== tile.id &&
+      t.z === tile.z && Math.abs(t.r - tile.r) < 0.6 &&
+      t.c < tile.c && tile.c - t.c < 1.1
+    );
+    const blockRight = tiles.some(t =>
+      !t.removed && t.id !== tile.id &&
+      t.z === tile.z && Math.abs(t.r - tile.r) < 0.6 &&
+      t.c > tile.c && t.c - tile.c < 1.1
+    );
     return !(blockLeft && blockRight);
   }
 
@@ -758,23 +781,28 @@ function renderBoard() {
 function isAvailable(tile) {
   if (tile.removed) return false;
 
-  // Covered: any non-removed tile at same c,r but HIGHER z
+  // Covered: any tile at a higher z whose c,r overlaps this tile's c,r
+  // Overlap means both coords are within 1 unit of each other
   const coveredAbove = state.tiles.some(t =>
     !t.removed && t.id !== tile.id &&
     t.z > tile.z &&
-    t.c === tile.c &&
-    t.r === tile.r
+    Math.abs(t.c - tile.c) < 1 &&
+    Math.abs(t.r - tile.r) < 1
   );
   if (coveredAbove) return false;
 
-  // Blocked left AND right at the same layer and row
+  // Free on left OR right: no same-z tile within 1 unit horizontally on same row
   const blockLeft = state.tiles.some(t =>
     !t.removed && t.id !== tile.id &&
-    t.z === tile.z && t.r === tile.r && t.c === tile.c - 1
+    t.z === tile.z &&
+    Math.abs(t.r - tile.r) < 0.6 &&
+    t.c < tile.c && tile.c - t.c < 1.1
   );
   const blockRight = state.tiles.some(t =>
     !t.removed && t.id !== tile.id &&
-    t.z === tile.z && t.r === tile.r && t.c === tile.c + 1
+    t.z === tile.z &&
+    Math.abs(t.r - tile.r) < 0.6 &&
+    t.c > tile.c && t.c - tile.c < 1.1
   );
   return !(blockLeft && blockRight);
 }
